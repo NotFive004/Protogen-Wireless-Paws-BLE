@@ -1,0 +1,96 @@
+#include <Arduino.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEClient.h>
+#include <BLEScan.h>
+#include <BLE2902.h>
+
+// UUID per il servizio e la caratteristica
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
+#define CHARACTERISTIC_UUID "87654321-4321-4321-4321-210987654321"  // Stesso UUID per entrambi gli slave
+
+// Indirizzi MAC degli slave (ProtoPaw)
+BLEAddress paw1Address("EC:DA:3B:BE:BE:B2");  // MAC del primo ProtoPaw
+BLEAddress paw2Address("80:65:99:6A:D2:4E");  // MAC del secondo ProtoPaw
+
+BLEClient* pClient1;
+BLEClient* pClient2;
+BLERemoteCharacteristic* pRemoteCharacteristic1;
+BLERemoteCharacteristic* pRemoteCharacteristic2;
+
+bool isConnected1 = false;
+bool isConnected2 = false;
+
+// Callback function for ProtoPaw1
+void notifyCallbackPaw1(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* data, size_t length, bool isNotify) {
+  Serial.print("Received notification from Paw 1: ");
+  Serial.write(data, length);
+  Serial.println();
+}
+
+// Callback function for ProtoPaw2
+void notifyCallbackPaw2(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* data, size_t length, bool isNotify) {
+  Serial.print("Received notification from Paw 2: ");
+  Serial.write(data, length);
+  Serial.println();
+}
+
+bool connectToPaw(BLEAddress address, BLEClient** pClient, BLERemoteCharacteristic** pRemoteCharacteristic, notify_callback callback) {
+  *pClient = BLEDevice::createClient();
+  Serial.print("Connecting to Paw at ");
+  Serial.println(address.toString().c_str());
+
+  unsigned long startAttemptTime = millis();  // Tempo di inizio del tentativo
+  unsigned long timeout = 10000;  // Timeout di 10 secondi
+
+  // Tentare la connessione finché non si riesce o non scade il timeout
+  while (millis() - startAttemptTime < timeout) {
+    if ((*pClient)->connect(address)) {
+      Serial.println("Connected to Paw");
+      BLERemoteService* pRemoteService = (*pClient)->getService(SERVICE_UUID);
+      if (pRemoteService) {
+        *pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
+        if (*pRemoteCharacteristic) {
+          if ((*pRemoteCharacteristic)->canNotify()) {
+            (*pRemoteCharacteristic)->registerForNotify(callback);
+          }
+          return true;
+        } else {
+          Serial.println("Failed to get characteristic.");
+        }
+      } else {
+        Serial.println("Failed to get service.");
+      }
+    } else {
+      Serial.println("Retrying connection...");
+      delay(500);  // Ritardo prima di tentare nuovamente
+    }
+  }
+
+  Serial.println("Failed to connect to Paw within timeout.");
+  return false;
+}
+
+void setup() {
+  Serial.begin(115200);
+  BLEDevice::init("ProtoHead");
+
+  // Connessione iniziale ai due ProtoPaw con le relative callback per le notifiche
+  isConnected1 = connectToPaw(paw1Address, &pClient1, &pRemoteCharacteristic1, notifyCallbackPaw1);
+  isConnected2 = connectToPaw(paw2Address, &pClient2, &pRemoteCharacteristic2, notifyCallbackPaw2);
+}
+
+void loop() {
+  // Verifica lo stato di connessione e riconnette se necessario
+  if (pClient1 && !pClient1->isConnected()) {
+    Serial.println("ProtoPaw 1 disconnected. Reconnecting...");
+    isConnected1 = connectToPaw(paw1Address, &pClient1, &pRemoteCharacteristic1, notifyCallbackPaw1);
+  }
+
+  if (pClient2 && !pClient2->isConnected()) {
+    Serial.println("ProtoPaw 2 disconnected. Reconnecting...");
+    isConnected2 = connectToPaw(paw2Address, &pClient2, &pRemoteCharacteristic2, notifyCallbackPaw2);
+  }
+  // Il master non fa polling, riceve notifiche dagli slave
+  delay(1000);
+}
