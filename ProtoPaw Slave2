@@ -1,0 +1,90 @@
+#include <Arduino.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+// UUID per il servizio e la caratteristica
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789012"
+#define CHARACTERISTIC_UUID "87654321-4321-4321-4321-210987654321"
+
+// Variabile per la caratteristica BLE
+BLECharacteristic *pCharacteristic;
+BLEAdvertising *pAdvertising;
+BLEServer *pServer;
+bool isConnected = false;
+bool advertisingActive = false;  // Flag to track advertising status
+
+void startAdvertising() {
+  if (advertisingActive) {
+    Serial.println("Advertising is already active.");
+    return;
+  }
+  
+  pAdvertising->start();
+  advertisingActive = true;
+  Serial.println("Advertising restarted.");
+}
+
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    Serial.println("Device connected.");
+    isConnected = true;
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    Serial.println("Device disconnected.");
+    isConnected = false;
+    advertisingActive = false;  // Stop the advertising flag
+    startAdvertising();  // Restart advertising
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  BLEDevice::init("ProtoPaw2");
+
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+                    );
+
+  pCharacteristic->addDescriptor(new BLE2902());  // Necessario per abilitare le notifiche
+  
+  pService->start();
+
+  pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  
+  startAdvertising();  // Start advertising initially
+
+  Serial.println("BLE server avviato e advertising avviato.");
+}
+
+void loop() {
+  static unsigned long lastSendTime = 0;
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - lastSendTime >= 1000) {
+    String message = "Paw 2: " + String(random(100));
+    pCharacteristic->setValue(message.c_str());  // Imposta il valore
+    pCharacteristic->notify();  // Invia la notifica al master
+    Serial.println("Sent: " + message);
+    lastSendTime = currentMillis;
+  }
+
+  // Only check advertising status if not connected
+  if (!isConnected) {
+    if (!advertisingActive) {
+      Serial.println("Advertising stopped. Restarting...");
+      startAdvertising();
+    }
+  }
+
+  delay(1000);  // Delay to prevent rapid polling
+}
